@@ -1,0 +1,211 @@
+/**
+  Automated Fluid Dispenser
+  created by Kian Abbasi, Kabeer Makkar, Nicolas Mansour, Simon Liu
+  2023-12-3
+  **/
+
+#include <AFMotor.h>
+#include <Servo.h> 
+
+//defining servo object
+Servo ServoMotor;
+
+//define name of the motor and the port
+AF_DCMotor motor(1);
+AF_DCMotor pump(4);
+
+//defining which pin each component is linked to
+#define IRpin A0
+#define onButton A1
+#define killSwitch  A2
+#define limitSwitch A5
+
+//initializing boolean states for user inputs, doesnt matter what it is initially since it usually is instantly changed, not setting a default value
+bool onButtonState;
+bool killSwitchState;
+bool IRstate;
+
+float openAngle = 155;
+float closedAngle = 180;
+
+// bool limitSwitchState;
+// bool previousLimitState; 
+
+//initializing variables for which function is active
+bool previousButtonState = LOW;
+bool previousIRState = LOW;
+bool machineInit = LOW;
+bool motorRun = 0;
+
+int dispensing = 0; 
+
+// time to dispense in miliseconds
+long powderTime[] = {1.29*1000 ,1.29*1000,2.58*1000,2.58*1000,1.29*1000};
+long liquidTime[] = {15366,13100,13100,13100,13100};
+long tubeCount = 0;
+
+//initializing timer variables
+unsigned long lastTimeSinceStop = 0;
+unsigned long lastTimeSinceStop2 = 0; 
+unsigned long pumpTime = 13000;
+int defaultSpeed = 140; //the highest speed the turntable will go
+
+void setup() {
+  //setting up motor state & speed
+  Serial.begin(9600);
+  motor.run(RELEASE);
+  motor.setSpeed(defaultSpeed);
+
+  //setting up initial pump state
+  pump.run(RELEASE);
+
+  //setting up whether ir & led are input/output
+  pinMode(IRpin, INPUT);
+
+  //initialize servo
+  ServoMotor.attach(9);
+  ServoMotor.write(closedAngle);
+
+  pinMode(onButton, INPUT_PULLUP);
+  pinMode(killSwitch, INPUT_PULLUP);
+}
+
+void killMySelf () {
+  Serial.println("running stopped."); 
+  motor.run(RELEASE);
+  pump.run(RELEASE);
+  ServoMotor.write(closedAngle);
+  exit(0);
+}
+
+//dispensing mode 
+void dispense(){
+  delay(300);
+  ServoMotor.write(openAngle);
+  delay(1000);
+  Serial.println("DISPENSING" );
+    lastTimeSinceStop = millis();
+    pump.run(FORWARD);
+    pump.setSpeed(255); //starts the pump when it runs
+    ServoMotor.write(openAngle);
+
+    while(dispensing == 1){
+     killSwitchState = !digitalRead(killSwitch);
+     if (killSwitchState){ 
+       killMySelf();
+     }
+      if (millis() - lastTimeSinceStop >= 4000){
+       ServoMotor.write(closedAngle);
+      }  
+        if (millis() - lastTimeSinceStop >= liquidTime[tubeCount]){ //if timer is up, reverts state to motor and dispensing ends
+          pump.run(RELEASE);
+          ServoMotor.write(closedAngle);
+          Serial.println("BROKE" );
+          tubeCount++;
+          break;
+         }
+      }
+  motorRun = !motorRun;
+  dispensing = 0;
+}   
+//compensates for delay of infrared sensor to ensure that turntable is completely aligned with dispenser before powder and water released. If turntable moves too much, functions are called to align it back in place. 
+void shimmyBack(){
+  long lastTimeSinceStop3 = millis();
+       Serial.println("B1");
+      motor.setSpeed(130);
+      while (millis() - lastTimeSinceStop3 < 20 && digitalRead(IRpin)){
+        lastTimeSinceStop2 = millis();
+        motor.run(FORWARD);
+      Serial.println("B2");
+      }
+      lastTimeSinceStop3 = millis();
+      while (millis() - lastTimeSinceStop3 < 50 && digitalRead(IRpin)){
+        lastTimeSinceStop2 = millis();
+        motor.run(RELEASE);
+      Serial.println("B2");
+      }
+}
+void shimmyForward(){
+  long lastTimeSinceStop3 = millis();
+    while (millis() - lastTimeSinceStop3 < 30){
+        Serial.println("B2");
+        motor.run(BACKWARD);
+      }
+      lastTimeSinceStop3 = millis();
+      while (millis() - lastTimeSinceStop3 < 50){
+        motor.run(RELEASE);
+      Serial.println("B2");
+      }
+}
+void correction(){
+  Serial.println("A1");
+  lastTimeSinceStop2 = millis();
+  int stopTime = 4000;
+  while(millis() - lastTimeSinceStop2 < stopTime){
+    killSwitchState = !digitalRead(killSwitch);
+        if (killSwitchState){
+          killMySelf();
+        }
+    if(!digitalRead(IRpin)){
+       motor.run(RELEASE);
+       Serial.println("A2");
+      delay(500);
+       Serial.println("A3");
+      if(!digitalRead(IRpin)){
+         Serial.println("A4");
+        stopTime = 0;
+      }
+    } else {
+      shimmyBack();
+      Serial.println(millis() - lastTimeSinceStop);
+      motor.run(RELEASE);
+      Serial.println("B3");
+      lastTimeSinceStop2 = millis();
+    }
+  }
+  motor.setSpeed(defaultSpeed);
+}
+void loop() {
+
+  //setting state variables equal to what is read, except it is opposite because 0 should be off, like how god intended
+ onButtonState= !digitalRead(onButton);
+ killSwitchState = !digitalRead(killSwitch);
+ IRstate = digitalRead(IRpin); 
+
+ //check if it is time to stop
+if (killSwitchState){
+  killMySelf(); 
+}
+   if (tubeCount ==5 ) { 
+    killMySelf();
+   }
+    //start the motor if the button is pressed
+    if (onButtonState == HIGH){
+      if (previousButtonState == LOW) {
+        motorRun = !motorRun; 
+        machineInit = HIGH;
+     }
+    }
+      if (previousIRState == HIGH && IRstate == LOW && machineInit == 1) {
+        motorRun = 0;
+        motor.run(FORWARD);
+        delay(15);
+        motor.run(RELEASE);
+        correction();
+        dispensing = 1;
+      }
+    //determines if motor runs based on which subfunction is active
+    if(motorRun == LOW){
+      motor.run(RELEASE);
+    } else {
+      shimmyForward();
+    }
+    //if subfunction dispensing is active, this bit runs
+    if (dispensing == 1){
+      dispense();
+  } 
+  previousButtonState = onButtonState;
+  previousIRState = IRstate;
+}
+
+
